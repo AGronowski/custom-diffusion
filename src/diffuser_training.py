@@ -1026,7 +1026,7 @@ def main(args):
 
                         save_path = os.path.join(args.output_dir, f"delta_{global_step}.bin")
                         save_progress(text_encoder, unet, modifier_token_id, accelerator, args, save_path)
-                        sample_diffuser.sample(model_id = args.pretrained_model_name_or_path, delta_ckpt = save_path, prompt = args.instance_prompt, compress = args.compress, freeze_model = args.freeze_model, cfg =7.5)
+                        sample_diffuser.sample(model_id = args.pretrained_model_name_or_path, delta_ckpt = save_path, prompt = args.instance_prompt, freeze_model = args.freeze_model)
 
                         
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}

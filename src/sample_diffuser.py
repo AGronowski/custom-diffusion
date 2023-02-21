@@ -5,25 +5,27 @@ import numpy as np
 # import matplotlib.pyplot as plt
 sys.path.append('./')
 import torch
-from diffusers import StableDiffusionPipeline
-from diffusers import DPMSolverMultistepScheduler 
+from diffusers import StableDiffusionPipeline, StableDiffusionUpscalePipeline
+from diffusers import DPMSolverMultistepScheduler, EulerAncestralDiscreteScheduler, DPMSolverMultistepScheduler 
 from diffusers import DDIMScheduler
 from diffusers.utils.import_utils import is_xformers_available
 from pytorch_lightning import seed_everything
+from PIL import Image
+
 
 
 from src import diffuser_training 
 import datetime
 
 
-def sample(model_id, delta_ckpt,prompt, compress, freeze_model,cfg):
+def sample(model_id, delta_ckpt,prompt,negative_prompt='', num_steps = 30, freeze_model='crossattn_kv',cfg=7.5, num_images=5,comment=''):
     # torch.cuda.empty_cache()
-    # print(torch.cuda.memory_summary(device=None, abbreviated=False))
+#     # print(torch.cuda.memory_summary(device=None, abbreviated=False))
 
-    generator = torch.Generator("cuda").manual_seed(1029)  
+#     generator = torch.Generator("cuda").manual_seed(1029)  
     seed_everything(1029)
     
-    pipe = StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float16,generator=generator).to("cuda")
+    pipe = StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float16).to("cuda")
     
     if is_xformers_available():
         pipe.enable_xformers_memory_efficient_attention()
@@ -32,13 +34,13 @@ def sample(model_id, delta_ckpt,prompt, compress, freeze_model,cfg):
     
     
     # print(pipe.scheduler.compatibles)
-    pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)  
+    pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(pipe.scheduler.config)  
 
     # outdir = 'outputs'
     # os.makedirs(outdir, exist_ok=True)
     if delta_ckpt is not None:
         
-        diffuser_training.load_model(pipe.text_encoder, pipe.tokenizer, pipe.unet, delta_ckpt, compress, freeze_model)
+        diffuser_training.load_model(pipe.text_encoder, pipe.tokenizer, pipe.unet, delta_ckpt, False, freeze_model)
         outdir = os.path.dirname(delta_ckpt) #samples will be created in same directory as delta_ckpt
 
         all_images = []
@@ -46,9 +48,7 @@ def sample(model_id, delta_ckpt,prompt, compress, freeze_model,cfg):
     prompt_addition = ""
     prompt_addition = ""
     full_prompt = prompt + prompt_addition
-    negative_prompt = args.negative_prompt
     guidance_scale=cfg
-    num_inference_steps = args.num_steps
     eta=0
     
 
@@ -57,21 +57,55 @@ def sample(model_id, delta_ckpt,prompt, compress, freeze_model,cfg):
     os.makedirs(dir_name, exist_ok=True)
     print(f'made directory {dir_name}')
     
-    steps = delta_ckpt.split('_')[1].split('.')[0]
-    print(f'steps {steps}')
+    # write number of training steps in saved name
+    training_steps = delta_ckpt.split('_')[1].split('.')[0]
+    print(f'steps {training_steps}')
     
-    if len(args.prompt)>10:
-        args.prompt='long'    
+    # takes only first 50 characters of prompt to name the image file
+    prompt = prompt[:50]
+    
+    
+    upscale = False
+    
+    if upscale:
+    
+        model_id = "stabilityai/stable-diffusion-x4-upscaler"
+        pipeline = StableDiffusionUpscalePipeline.from_pretrained(
+            model_id, revision="fp16", torch_dtype=torch.float16
+        )
+        pipeline = pipeline.to("cuda")
+
+        if is_xformers_available():
+            pipeline.enable_xformers_memory_efficient_attention()
+            # pipeline.set_use_memory_efficient_attention_xformers(True)
+        else:
+            print('xformers not available')
+
+
+
+
+    
+    
 
     with torch.inference_mode():
-        for i in range (args.num_images):
-            image = pipe(prompt = full_prompt, negative_prompt = negative_prompt, num_images_per_prompt = 1,num_inference_steps=num_inference_steps, guidance_scale=guidance_scale, eta=eta,generator=generator).images[0]
+        for i in range (num_images):
+            image = pipe(prompt = full_prompt, negative_prompt = negative_prompt, num_images_per_prompt = 1,num_inference_steps=num_steps, guidance_scale=guidance_scale, eta=eta).images[0]
             print(f'saving image {i}')
-            image.save(f'{dir_name}/{steps}_{cfg}_{i}_{args.comment}_{prompt}.jpg')
+            image.save(f'{dir_name}/{training_steps}_{cfg}_{i}_{comment}_{prompt}.jpg')
             
-#     if len(args.negative_prompt)>10:
-#         args.negative_prompt='long'
-    
+            if upscale:
+                print(f'upscaling image {i}')
+                
+                # upscale from file
+                image = Image.open(f"{dir_name}/test.png")
+                upscaled_image = pipeline(prompt=prompt, image=image, noise_level=100).images[0]           
+                upscaled_image.save(f'{dir_name}/test_UP.jpg')
+
+                # upscale generated image
+#                 upscaled_image = pipeline(prompt=prompt, image=image, noise_level=100).images[0]
+#                 upscaled_image.save(f'{dir_name}/{training_steps}_{cfg}_{i}_{comment}_{prompt}_UP.jpg')
+
+
 
 #                image.save(f'{dir_name}/{args.prompt}_{args.negative_prompt}_{i}_{num_inference_steps}_{guidance_scale}_{eta}_{args.comment}.jpg')
     
@@ -105,4 +139,4 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    sample(args.ckpt, args.delta_ckpt, args.prompt, args.compress, args.freeze_model,args.cfg)
+    sample(args.ckpt, args.delta_ckpt, args.prompt, args.negative_prompt, args.num_steps, args.freeze_model,args.cfg,args.num_images,args.comment)
